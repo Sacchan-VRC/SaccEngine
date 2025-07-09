@@ -31,7 +31,6 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
-
 bool fullScreen = false;
 float FoV = 90;
 double FPS_Limit = 200;
@@ -205,13 +204,19 @@ DrawCall createDrawCall(
 
     return dc;
 }
-
 static void error_callback(int error, const char *description)
 {
     fprintf(stderr, "Error: %s\n", description);
 }
 void reloadShaders() { std::cout << "Reloading Shaders" << std::endl; }
 
+glm::quat getQuaternionFromEuler(const glm::vec3 &eulerAngles)
+{
+    glm::quat qPitch = glm::angleAxis(eulerAngles.x, glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::quat qYaw = glm::angleAxis(eulerAngles.y, glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::quat qRoll = glm::angleAxis(eulerAngles.z, glm::vec3(0.0f, 0.0f, 1.0f));
+    return qPitch * qYaw * qRoll;
+}
 bool check = false;
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods)
 {
@@ -283,8 +288,7 @@ static void key_callback(GLFWwindow *window, int key, int scancode, int action, 
 
         (*allObjects_Ptr)[newShip].physics->physPosition = *camPos_Ptr + glm::vec3(0.0f, -1.0f, 0.0f);
         (*allObjects_Ptr)[newShip].position = (*allObjects_Ptr)[newShip].physics->physPosition;
-        glm::quat camQuat = glm::quat(glm::vec3(0.0f, (*camRot_Ptr).y, 0.0f));
-        camQuat = glm::quat(glm::vec3((*camRot_Ptr).x, 0.0f, 0.0f)) * camQuat;
+        glm::quat camQuat = getQuaternionFromEuler(*camRot_Ptr);
         const glm::vec3 forward = glm::vec3(0.0f, 0.0f, -1.0f) * camQuat;
         (*allObjects_Ptr)[newShip].scale = glm::vec3(10.0f, 10.0f, 10.0f);
         (*allObjects_Ptr)[newShip].physics->colliderScale = (*allObjects_Ptr)[newShip].scale;
@@ -345,23 +349,6 @@ char *read_file(const std::string &filename)
 
     return result;
 }
-
-glm::vec3 GetForwardVector(const glm::mat4 &viewMatrix)
-{
-    // Extract the upper 3x3 part of the view matrix
-    glm::mat3 rotation = glm::mat3(viewMatrix);
-
-    // Calculate the inverse transpose of the rotation matrix
-    glm::mat3 rotationInverseTranspose = glm::inverse(glm::transpose(rotation));
-
-    // Extract the forward vector as the second column of the rotationInverseTranspose
-    return glm::vec3(rotationInverseTranspose[1]);
-}
-
-// glm::quat angleAxisDegs(float angle, glm::vec3 axis)
-// {
-//     return glm::angleAxis(glm::radians(angle), axis);
-// }
 
 glm::vec3 projectToPoint(glm::vec3 vec, glm::vec3 point)
 {
@@ -451,7 +438,7 @@ void Inputs_MoveObject(GLFWwindow *window, float dt, glm::vec3 *campos, glm::vec
 
 float lastG;
 double mouseXabsLast, mouseYabsLast;
-void Inputs(GLFWwindow *window, glm::vec3 *campos, glm::vec3 *camrot, float dt)
+void Inputs(GLFWwindow *window, float dt)
 {
     float mouseSens = 0.00001f;
     float moveSpdWalk = 5 * dt;
@@ -464,11 +451,10 @@ void Inputs(GLFWwindow *window, glm::vec3 *campos, glm::vec3 *camrot, float dt)
     mouseY = mouseYabs - mouseYabsLast;
     mouseXabsLast = mouseXabs;
     mouseYabsLast = mouseYabs;
-    camrot->y += mouseX * mouseSens * FoV;
-    camrot->x += mouseY * mouseSens * FoV;
+    camRot_Ptr->y += mouseX * mouseSens * FoV;
+    camRot_Ptr->x += mouseY * mouseSens * FoV;
     // FPS cameras rotate around Y then X
-    glm::quat camQuat = glm::quat(glm::vec3(0.0f, camrot->y, 0.0f));
-    camQuat = glm::quat(glm::vec3(camrot->x, 0.0f, 0.0f)) * camQuat;
+    glm::quat camQuat = getQuaternionFromEuler(*camRot_Ptr);
     int state = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT);
     if (state == GLFW_PRESS)
     {
@@ -478,37 +464,37 @@ void Inputs(GLFWwindow *window, glm::vec3 *campos, glm::vec3 *camrot, float dt)
     if (state == GLFW_PRESS)
     {
         const glm::vec3 forward = glm::vec3(0.0f, 0.0f, -1.0f) * camQuat;
-        *campos += forward * moveSpdCur;
+        *camPos_Ptr += forward * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_S);
     if (state == GLFW_PRESS)
     {
         const glm::vec3 back = glm::vec3(0.0f, 0.0f, 1.0f) * camQuat;
-        *campos += back * moveSpdCur;
+        *camPos_Ptr += back * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_A);
     if (state == GLFW_PRESS)
     {
         const glm::vec3 left = glm::vec3(-1.0f, 0.0f, 0.0f) * camQuat;
-        *campos += left * moveSpdCur;
+        *camPos_Ptr += left * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_D);
     if (state == GLFW_PRESS)
     {
         const glm::vec3 right = glm::vec3(1.0f, 0.0f, 0.0f) * camQuat;
-        *campos += right * moveSpdCur;
+        *camPos_Ptr += right * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_E);
     if (state == GLFW_PRESS)
     {
         const glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-        *campos += up * moveSpdCur;
+        *camPos_Ptr += up * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_Q);
     if (state == GLFW_PRESS)
     {
         const glm::vec3 down = glm::vec3(0.0f, -1.0f, 0.0f);
-        *campos += down * moveSpdCur;
+        *camPos_Ptr += down * moveSpdCur;
     }
     state = glfwGetKey(window, GLFW_KEY_EQUAL);
     if (state == GLFW_PRESS)
@@ -547,9 +533,8 @@ void Inputs(GLFWwindow *window, glm::vec3 *campos, glm::vec3 *camrot, float dt)
                 m * r * r / 2, 0, 0,
                 0, m * r * r / 2, 0,
                 0, 0, m * r * r / 2);
-            glm::quat camQuat = glm::quat(glm::vec3(0.0f, (*camRot_Ptr).y, 0.0f));
-            camQuat = glm::quat(glm::vec3((*camRot_Ptr).x, 0.0f, 0.0f)) * camQuat;
-            const glm::vec3 forward = glm::vec3(0.0f, 0.0f, -1.0f) * camQuat;
+            glm::quat camQuat = getQuaternionFromEuler(*camRot_Ptr);
+            const glm::vec3 forward = glm::vec3(0, 0, -1) * camQuat;
             (*allObjects_Ptr)[newSphere].physics->velocity = forward * 10.0f;
         }
         state = glfwGetKey(window, GLFW_KEY_V);
@@ -1517,7 +1502,7 @@ int main(void)
         mat4x4 m, p, mvp;
 
         glfwPollEvents();
-        Inputs(window, &camPos, &camRot, deltaTime);
+        Inputs(window, deltaTime);
         if (numships < 100)
         {
             numships++;
