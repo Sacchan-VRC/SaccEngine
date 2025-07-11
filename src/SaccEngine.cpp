@@ -38,6 +38,7 @@ double FPS_Limit_FrameLen = (double)1 / FPS_Limit;
 double deltaTime;
 
 glm::vec3 gravity = glm::vec3(0, -9.80665, 0);
+float timeScale = 1;
 
 unsigned int GroundObject;
 unsigned int colliderShip;
@@ -136,10 +137,10 @@ typedef struct physicsProperties
     myMesh *colliderMesh;
     glm::vec3 colliderScale = glm::vec3(1, 1, 1);
     float mass = 1.0f;
-    float friction = 0.05f;
+    float friction = .2f;
     float restitution = 0.5f;
     float Drag = 0.1f;
-    float angDrag = 0.1f;
+    float angDrag = 0.002f;
     glm::vec3 physPosition;
     glm::quat physRotation;
     glm::vec3 velocity;
@@ -368,9 +369,11 @@ glm::vec3 getPointVelocity(const myObject *myObj, glm::vec3 pos)
     glm::vec3 rotAxis = glm::normalize(myObj->physics->AngVel);
     float RPS = glm::degrees(glm::dot(rotAxis, myObj->physics->AngVel)) / 360.0f;
     float surfaceSpeed = RPS * circum;
-    // Calculate the velocity of a point on the object relative to its center of mass
     glm::vec3 pointVelocity = myObj->physics->velocity + (glm::cross(glm::normalize(pos), rotAxis) * surfaceSpeed);
-
+    if (std::isnan(pointVelocity.x))
+    {
+        return myObj->physics->velocity;
+    }
     return pointVelocity;
 }
 
@@ -378,10 +381,17 @@ bool Blast = false;
 void addForceAtPosition(myObject *physObj, glm::vec3 forceVector, glm::vec3 position)
 {
     glm::vec3 localPosition = position - physObj->physics->physPosition;
-    glm::vec3 torque = glm::cross(forceVector, localPosition); // momentArm = localPosition
-    glm::vec3 angularAcceleration = (glm::inverse(physObj->physics->IT.values) * (torque));
-    physObj->physics->AngVel += angularAcceleration;
-    physObj->physics->velocity += forceVector;
+    glm::vec3 forceNorm = glm::normalize(forceVector);
+    glm::vec3 posNorm = glm::normalize(localPosition);
+    float forceDot = abs(glm::dot(posNorm, forceNorm));
+    glm::vec3 forceParallel = forceVector * forceDot;
+    glm::vec3 forcePerpendicular = forceVector * (1 - forceDot);
+    physObj->physics->velocity += forceParallel / physObj->physics->mass;
+    float circumference = M_PI * glm::length(localPosition) * 2;
+    float angularAcceleration = glm::radians(360 * glm::length(forcePerpendicular) / circumference / physObj->physics->mass);
+    glm::vec3 rotAxis = glm::normalize(glm::cross(forceNorm, posNorm));
+    glm::vec3 addedAngVel = (rotAxis * angularAcceleration);
+    physObj->physics->AngVel += addedAngVel;
 }
 
 void Inputs_MoveObject(GLFWwindow *window, float dt, glm::vec3 *campos, glm::vec3 *camrot, myObject *physObj)
@@ -426,9 +436,20 @@ void Inputs_MoveObject(GLFWwindow *window, float dt, glm::vec3 *campos, glm::vec
     state = glfwGetKey(window, GLFW_KEY_B);
     if (state == GLFW_PRESS)
     {
+        // test if PV after force application matches the force
+        glm::vec3 forcePoint = physObj->physics->physPosition + glm::vec3(0, -1, 0) * physObj->physics->colliderScale.x * 0.5f;
         if (!Blast)
-            addForceAtPosition(physObj, glm::vec3(0.0f, 0.0f, 15.0f), physObj->physics->physPosition + glm::vec3(0, -1, 0) * physObj->physics->colliderScale.x * 0.5f);
-        Blast = true;
+        {
+            addForceAtPosition(physObj, glm::vec3(0.0f, 0.0f, 15.0f) * physObj->physics->mass, forcePoint);
+
+            // auto debugsphere = createObj("mesh/testsphere.glb", allObjects_Ptr);
+            // (*allObjects_Ptr)[debugsphere].position = forcePoint;
+            // (*allObjects_Ptr)[debugsphere].scale = glm::vec3(0.1f, 0.1f, 0.1f);
+
+            glm::vec3 pvtesresult = getPointVelocity(physObj, forcePoint);
+            std::cout << "pvtest: " << glm::length(pvtesresult) << std::endl;
+            Blast = true;
+        }
     } //
     else
     {
@@ -509,13 +530,34 @@ void Inputs(GLFWwindow *window, float dt)
 
     if (glfwGetTime() - lastG > 0.1f)
     {
+        state = glfwGetKey(window, GLFW_KEY_PAGE_DOWN);
+        if (state == GLFW_PRESS)
+        {
+            timeScale *= 0.8f;
+        }
+        state = glfwGetKey(window, GLFW_KEY_PAGE_UP);
+        if (state == GLFW_PRESS)
+        {
+            timeScale *= 1.25f;
+        }
+        state = glfwGetKey(window, GLFW_KEY_HOME);
+        if (state == GLFW_PRESS)
+        {
+            timeScale = 1;
+        }
+        state = glfwGetKey(window, GLFW_KEY_END);
+        if (state == GLFW_PRESS)
+        {
+            timeScale = 0;
+        }
+
         lastG = glfwGetTime();
         state = glfwGetKey(window, GLFW_KEY_G);
         std::random_device rd;
         std::mt19937 gen(rd()); //
-        std::uniform_real_distribution<double> dis(0.4, 1.0);
         if (state == GLFW_PRESS)
         {
+            std::uniform_real_distribution<double> dis(0.4, 1.0);
             unsigned int newSphere = createObj("mesh/testsphere.glb", allObjects_Ptr);
             (*allObjects_Ptr)[newSphere].physics = new physicsProperties();
             (*allObjects_Ptr)[newSphere].physics->Collidertype = 0;
@@ -530,9 +572,9 @@ void Inputs(GLFWwindow *window, float dt)
             float r = (*allObjects_Ptr)[newSphere].scale.x;
             float m = (*allObjects_Ptr)[newSphere].physics->mass;
             (*allObjects_Ptr)[newSphere].physics->IT = inertiaTensor(
-                m * r * r / 2, 0, 0,
-                0, m * r * r / 2, 0,
-                0, 0, m * r * r / 2);
+                (2.0 / 5.0) * m * r * r, 0, 0,
+                0, (2.0 / 5.0) * m * r * r, 0,
+                0, 0, (2.0 / 5.0) * m * r * r);
             glm::quat camQuat = getQuaternionFromEuler(*camRot_Ptr);
             const glm::vec3 forward = glm::vec3(0, 0, -1) * camQuat;
             (*allObjects_Ptr)[newSphere].physics->velocity = forward * 10.0f;
@@ -540,23 +582,27 @@ void Inputs(GLFWwindow *window, float dt)
         state = glfwGetKey(window, GLFW_KEY_V);
         if (state == GLFW_PRESS)
         {
-            unsigned int newCube = createObj("mesh/testcube.glb", allObjects_Ptr);
+            std::uniform_real_distribution<double> dis(.06f, 1);
+            unsigned int newCube = createObj("mesh/weirdshape1.glb", allObjects_Ptr);
             (*allObjects_Ptr)[newCube].physics = new physicsProperties();
             (*allObjects_Ptr)[newCube].physics->Collidertype = 1;
-            (*allObjects_Ptr)[newCube].physics->colliderMesh = &allLoadedMeshes[loadMesh("mesh/testcube.glb")].subMeshes[0];
+            (*allObjects_Ptr)[newCube].physics->colliderMesh = &allLoadedMeshes[loadMesh("mesh/weirdshape1.glb")].subMeshes[0];
 
-            float genrand = dis(gen);
-            (*allObjects_Ptr)[newCube].physics->colliderScale = glm::vec3(genrand, genrand, genrand);
-            double volume = glm::pow((*allObjects_Ptr)[newCube].scale.x, 3);
-            double mass = 5 * volume;
+            float genrandx = dis(gen);
+            float genrandy = dis(gen);
+            float genrandz = dis(gen);
+            (*allObjects_Ptr)[newCube].physics->colliderScale = glm::vec3(genrandx, genrandy, genrandz);
+            (*allObjects_Ptr)[newCube].scale = glm::vec3((*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.y, (*allObjects_Ptr)[newCube].physics->colliderScale.z);
+            glm::vec3 scale = (*allObjects_Ptr)[newCube].scale;
+            float volume = genrandx * genrandy * genrandz * 2;
+            float mass = 1 * volume;
             (*allObjects_Ptr)[newCube].physics->mass = mass;
-            (*allObjects_Ptr)[newCube].scale = glm::vec3((*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.x);
             (*allObjects_Ptr)[newCube].physics->physPosition = *camPos_Ptr + glm::vec3(0.0f, -1.0f, 0.0f);
             (*allObjects_Ptr)[newCube].position = (*allObjects_Ptr)[newCube].physics->physPosition;
 
             float a = (*allObjects_Ptr)[newCube].scale.x;
-            float b = (*allObjects_Ptr)[newCube].scale.x;
-            float c = (*allObjects_Ptr)[newCube].scale.x;
+            float b = (*allObjects_Ptr)[newCube].scale.y;
+            float c = (*allObjects_Ptr)[newCube].scale.z;
             float m = (*allObjects_Ptr)[newCube].physics->mass;
             (*allObjects_Ptr)[newCube].physics->IT = inertiaTensor(
                 1 / 12.0f * m * (a * a + b * b), 0, 0,
@@ -573,22 +619,34 @@ void Inputs(GLFWwindow *window, float dt)
         state = glfwGetKey(window, GLFW_KEY_Z);
         if (state == GLFW_PRESS)
         {
+            std::uniform_real_distribution<double> dis(0.1, 1.0);
             unsigned int newCube = createObj("mesh/testcube.glb", allObjects_Ptr);
             (*allObjects_Ptr)[newCube].physics = new physicsProperties();
             (*allObjects_Ptr)[newCube].physics->Collidertype = 1;
             (*allObjects_Ptr)[newCube].physics->colliderMesh = &allLoadedMeshes[loadMesh("mesh/testcube.glb")].subMeshes[0];
-            physicsObjs.push_back(newCube); // this needs to be dynamic pointers or something
 
-            float genrand = dis(gen);
-            // (*allObjects_Ptr)[newCube].physics->colliderScale = glm::vec3(genrand, genrand, genrand);
-            (*allObjects_Ptr)[newCube].physics->mass = (4 / 3) * 1.0f * glm::pow(genrand, 3);
-            (*allObjects_Ptr)[newCube].scale = glm::vec3((*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.x);
+            float genrandx = dis(gen);
+            float genrandy = dis(gen);
+            float genrandz = dis(gen);
+            (*allObjects_Ptr)[newCube].physics->colliderScale = glm::vec3(genrandx, genrandy, genrandz);
+            (*allObjects_Ptr)[newCube].scale = glm::vec3((*allObjects_Ptr)[newCube].physics->colliderScale.x, (*allObjects_Ptr)[newCube].physics->colliderScale.y, (*allObjects_Ptr)[newCube].physics->colliderScale.z);
+            glm::vec3 scale = (*allObjects_Ptr)[newCube].scale;
+            float volume = scale.x * scale.y * scale.z * 2;
+            float mass = 1 * volume;
+            (*allObjects_Ptr)[newCube].physics->mass = mass;
             (*allObjects_Ptr)[newCube].physics->physPosition = *camPos_Ptr + glm::vec3(0.0f, -1.0f, 0.0f);
             (*allObjects_Ptr)[newCube].position = (*allObjects_Ptr)[newCube].physics->physPosition;
-            glm::quat camQuat = glm::quat(glm::vec3(0.0f, (*camRot_Ptr).y, 0.0f));
-            camQuat = glm::quat(glm::vec3((*camRot_Ptr).x, 0.0f, 0.0f)) * camQuat;
-            const glm::vec3 forward = glm::vec3(0.0f, 0.0f, -1.0f) * camQuat;
-            // (*allObjects_Ptr)[newCube].physics->velocity = forward * 10.0f;
+
+            float a = (*allObjects_Ptr)[newCube].scale.x;
+            float b = (*allObjects_Ptr)[newCube].scale.y;
+            float c = (*allObjects_Ptr)[newCube].scale.z;
+            float m = (*allObjects_Ptr)[newCube].physics->mass;
+            (*allObjects_Ptr)[newCube].physics->IT = inertiaTensor(
+                1 / 12.0f * m * (a * a + b * b), 0, 0,
+                0, 1 / 12.0f * m * (a * a + c * c), 0,
+                0, 0, 1 / 12.0f * m * (b * b + c * c));
+
+            physicsObjs.push_back(newCube); // this needs to be dynamic pointers or something
         }
     }
 }
@@ -894,55 +952,95 @@ glm::quat worldSpaceRotate(glm::quat inQuat, glm::vec3 axis, float degrees)
 float physDeltaTime = 0.02;
 double physicsTime;
 
-void convexmeshPlane(myObject *myObj, glm::vec3 norm, glm::vec3 position)
+void convexMeshPlane(myObject *myObj, glm::vec3 norm, glm::vec3 position)
 {
     // rotate plane to object space
     position -= myObj->physics->physPosition;
     glm::vec3 localNorm = glm::inverse(myObj->physics->physRotation) * norm;
     position = glm::inverse(myObj->physics->physRotation) * position;
 
+    // float APP_POINT_DEBIAS_STRENGTH = .1f;
+
+    float fastestVert = FLT_MIN;
+    float slowestVert = FLT_MAX;
     float lowestDot = FLT_MAX;
     size_t deepestVert = -1;
     std::vector<size_t> verts;
+    std::vector<float> verts_speed;
     float planeDist = glm::dot(localNorm, -position);
     bool collided = false;
     for (size_t i = 0; i < myObj->physics->colliderMesh->verts.size(); i++)
     {
-        float thisDot = glm::dot(myObj->physics->colliderMesh->verts[i].pos, localNorm);
+        float thisDot = glm::dot(myObj->physics->colliderMesh->verts[i].pos * myObj->physics->colliderScale, localNorm);
         if (-thisDot > planeDist)
         {
+            // get velocities in direction of plane of verts that are inside the plane
+            float thisVertSpeed = -glm::dot(norm, getPointVelocity(myObj, myObj->physics->physPosition + myObj->physics->physRotation * (myObj->physics->colliderMesh->verts[i].pos * myObj->physics->colliderScale)));
+            if (thisVertSpeed < 0)
+            {
+                // could happen if object is spinning very quickly
+                // std::cout << "Warning: Collision vert moving in wrong direction" << std::endl;
+                continue;
+            }
+            if (thisVertSpeed < slowestVert)
+            {
+                slowestVert = thisVertSpeed;
+            }
+            if (thisVertSpeed > fastestVert)
+            {
+                fastestVert = thisVertSpeed;
+            }
+            verts_speed.push_back(thisVertSpeed);
+
             verts.push_back(i);
             collided = true;
             if (thisDot < lowestDot)
             {
                 lowestDot = thisDot;
+                deepestVert = i;
             }
         }
     }
-    // find how deep into plane it is, teleport out by that much
     if (collided)
     {
+        // teleport to surface of plane
         myObj->physics->physPosition += norm * (-lowestDot - planeDist);
-        glm::vec3 worldSpaceVertPos;
-        for (size_t i = 0; i < verts.size(); i++)
+        glm::vec3 forceApplicationPoint;
+        // use deepest vert only
+        // forceApplicationPoint = myObj->physics->physPosition + myObj->physics->physRotation * (myObj->physics->colliderMesh->verts[deepestVert].pos * myObj->physics->colliderScale);
+        //
+        // use average point of verts that are below plane, bias towards deeper verts
+        float vertSpeedNormalizer = fastestVert - slowestVert;
+        if (vertSpeedNormalizer == 0)
         {
-            worldSpaceVertPos += myObj->physics->physPosition + myObj->physics->physRotation * myObj->physics->colliderMesh->verts[verts[i]].pos;
+            // if depth of all is equal use center point
+            for (size_t i = 0; i < verts.size(); i++)
+            {
+                forceApplicationPoint += (myObj->physics->physPosition + myObj->physics->physRotation * (myObj->physics->colliderMesh->verts[verts[i]].pos * myObj->physics->colliderScale));
+            }
         }
-        worldSpaceVertPos /= verts.size();
-        glm::vec3 pV = getPointVelocity(myObj, worldSpaceVertPos);
-        float normDot = glm::dot(norm, -pV);
+        else
+        {
+            // else bias towards deepest
+            for (size_t i = 0; i < verts.size(); i++)
+            {
+                float vertRelativeSpeed = ((verts_speed[i] - slowestVert) / vertSpeedNormalizer) * 2.0f;
+                // vertRelativeSpeed = glm::lerp(vertRelativeSpeed, 1.0f, APP_POINT_DEBIAS_STRENGTH);
+                forceApplicationPoint += vertRelativeSpeed * (myObj->physics->physPosition + myObj->physics->physRotation * (myObj->physics->colliderMesh->verts[verts[i]].pos * myObj->physics->colliderScale));
+            }
+        }
+        forceApplicationPoint /= verts.size();
+        //
+        glm::vec3 pV = getPointVelocity(myObj, forceApplicationPoint);
+        float normDot = glm::dot(-norm, pV);
         glm::vec3 normVel = norm * normDot;
-        glm::vec3 pVFlat = pV - normVel;
+        glm::vec3 pVFlat = pV + normVel;
         glm::vec3 forceToAdd = (normVel + (normVel * myObj->physics->restitution) + -pVFlat * myObj->physics->friction);
 
-        forceToAdd = glm::inverse(myObj->physics->physRotation) * forceToAdd;
-        forceToAdd = myObj->physics->IT.values * forceToAdd;
-        forceToAdd = myObj->physics->physRotation * forceToAdd;
-        addForceAtPosition(myObj, forceToAdd, worldSpaceVertPos);
-
+        addForceAtPosition(myObj, forceToAdd * myObj->physics->mass, forceApplicationPoint);
         // auto debugsphere = createObj("mesh/testsphere.glb", allObjects_Ptr);
-        // (*allObjects_Ptr)[debugsphere].position = worldSpaceVertPos;
-        // (*allObjects_Ptr)[debugsphere].scale = glm::vec3(0.3f, 0.3f, 0.3f);
+        // (*allObjects_Ptr)[debugsphere].position = forceApplicationPoint;
+        // (*allObjects_Ptr)[debugsphere].scale = glm::vec3(0.1f, 0.1f, 0.1f);
     }
 }
 
@@ -961,10 +1059,8 @@ void spherePlane(myObject *myObj, glm::vec3 norm, glm::vec3 position)
         glm::vec3 normVel = norm * normDot;
         glm::vec3 pVFlat = pV + normVel;
         glm::vec3 forceToAdd = (normVel + (normVel * myObj->physics->restitution) + -pVFlat * myObj->physics->friction);
-        if (glm::length2(forceToAdd) > 0.00001f)
-        {
-            addForceAtPosition(myObj, forceToAdd, point);
-        }
+
+        addForceAtPosition(myObj, forceToAdd * myObj->physics->mass, point);
         // auto debugsphere = createObj("mesh/testsphere.glb", allObjects_Ptr);
         // (*allObjects_Ptr)[debugsphere].scale = 0.1f;
         // (*allObjects_Ptr)[debugsphere].position = myObj->physics->physPosition - norm * radius;
@@ -1104,26 +1200,34 @@ void sphereSphere(myObject *thisObj, myObject *thatObj)
     if (dist < (thisObj->physics->colliderScale.x + thatObj->physics->colliderScale.x) * 0.5f)
     {
         float collisionSpeed = glm::distance(thisObj->physics->velocity, thatObj->physics->velocity);
-        glm::vec3 collisionNormal = glm::normalize(thisObj->physics->physPosition - thatObj->physics->physPosition);
+        glm::vec3 collisionDir = thatObj->physics->physPosition - thisObj->physics->physPosition;
+        glm::vec3 collisionNormal = glm::normalize(collisionDir);
 
         glm::vec3 res = ((thisObj->physics->colliderScale.x + thatObj->physics->colliderScale.x) * 0.5f - dist) * collisionNormal;
 
-        float sizeRatio = thisObj->physics->colliderScale.x / (thisObj->physics->colliderScale.x + thatObj->physics->colliderScale.x);
+        float massRatio = thisObj->physics->mass / (thisObj->physics->mass + thatObj->physics->mass);
 
-        thisObj->physics->physPosition += res * (1 - sizeRatio);
-        thatObj->physics->physPosition -= res * sizeRatio;
+        thisObj->physics->physPosition -= res * (1 - massRatio);
+        thatObj->physics->physPosition += res * massRatio;
 
         glm::vec3 velDif = thisObj->physics->velocity - thatObj->physics->velocity;
 
         float velDot = glm::dot(velDif, collisionNormal);
 
-        float massRatio = thisObj->physics->mass / (thisObj->physics->mass + thatObj->physics->mass);
+        glm::vec3 colPos = thisObj->physics->physPosition + (collisionNormal * (thisObj->scale.x * 0.5f));
+        float thisObjNormVel = glm::dot(collisionNormal, thisObj->physics->velocity);
+        glm::vec3 pv1 = getPointVelocity(thisObj, colPos) - collisionNormal * thisObjNormVel;
+        float thatObjNormVel = glm::dot(-collisionNormal, thatObj->physics->velocity);
+        glm::vec3 pv2 = getPointVelocity(thatObj, colPos) - -collisionNormal * thatObjNormVel;
+        glm::vec3 scrapeSpeed = pv1 - pv2;
 
-        glm::vec3 reflection = collisionNormal * velDot;
-        thisObj->physics->velocity -= reflection * (1 - massRatio);
-        thatObj->physics->velocity += reflection * massRatio;
-
-        // TODO: Friction
+        float combinedRestitution = thisObj->physics->restitution * thatObj->physics->restitution;
+        glm::vec3 reflection = collisionNormal * (velDot + velDot * combinedRestitution);
+        float combinedFric = thisObj->physics->friction * thatObj->physics->friction;
+        glm::vec3 colForce = reflection + scrapeSpeed * combinedFric;
+        // std::cout << "scrapeSpeed: " << glm::length(scrapeSpeed) << std::endl;
+        addForceAtPosition(thisObj, -colForce * (1 - massRatio) * thisObj->physics->mass, colPos);
+        addForceAtPosition(thatObj, colForce * massRatio * thatObj->physics->mass, colPos);
     }
 }
 
@@ -1301,7 +1405,7 @@ void updatePhysics(std::vector<myObject> *allObjects)
         }
         if (thisObj.physics->Collidertype == 1)
         {
-            convexmeshPlane(&thisObj, glm::vec3(0, 1, 0), glm::vec3(0, 0, 0));
+            convexMeshPlane(&thisObj, glm::vec3(0, 1, 0), glm::vec3(0, 0, 0));
         }
         for (size_t o = 0; o < physicsObjs.size(); o++)
         {
@@ -1322,7 +1426,7 @@ void updatePhysics(std::vector<myObject> *allObjects)
                 }
                 case 1: // convexmesh
                 {
-                    // convexmeshConvexmesh(&thisObj, &(*allObjects)[physicsObjs[o]]);
+                    // convexMeshConvexMesh(&thisObj, &(*allObjects)[physicsObjs[o]]);
                     break;
                 }
                 }
@@ -1336,7 +1440,7 @@ void updatePhysics(std::vector<myObject> *allObjects)
         {
             switch (thisObj.physics->Collidertype)
             {
-            case 0: // static mesh
+            case 0: // sphere
             {
                 switch ((*allObjects)[staticColliderObjs[o]].physics->Collidertype)
                 {
@@ -1361,14 +1465,12 @@ void physicsExtrapolation(std::vector<myObject> *allObjects, float amount)
     for (size_t i = 0; i < physicsObjs.size(); i++)
     {
         myObject &thisObj = (*allObjects)[physicsObjs[i]];
+        thisObj.position = thisObj.physics->physPosition + (thisObj.physics->velocity * amount);
         if (glm::length2(thisObj.physics->AngVel) > 0)
         {
-            thisObj.position = thisObj.physics->physPosition + (thisObj.physics->velocity * amount);
-
             glm::vec3 rotation_vector = thisObj.physics->AngVel;
             glm::vec3 normalized_rotation_vector = glm::normalize(rotation_vector);
             float rotation_rate = glm::dot(normalized_rotation_vector, (rotation_vector));
-
             thisObj.rotation = glm::angleAxis((-rotation_rate * amount), normalized_rotation_vector) * thisObj.physics->physRotation;
         }
     }
@@ -1439,11 +1541,21 @@ int main(void)
     // }
 
     // just one ball
+    float ballscale = 2;
     auto physobj1 = createObj("mesh/testsphere.glb", &allObjects);
     allObjects[physobj1].physics = new physicsProperties();
+    (*allObjects_Ptr)[physobj1].physics->colliderScale = glm::vec3(ballscale, ballscale, ballscale);
+    (*allObjects_Ptr)[physobj1].physics->mass = (4 / 3) * 1.0f * glm::pow(ballscale, 3);
+    (*allObjects_Ptr)[physobj1].scale = glm::vec3((*allObjects_Ptr)[physobj1].physics->colliderScale.x, (*allObjects_Ptr)[physobj1].physics->colliderScale.x, (*allObjects_Ptr)[physobj1].physics->colliderScale.x);
     allObjects[physobj1].physics->Collidertype = 0;
     allObjects[physobj1].physics->AngVel = glm::radians(glm::vec3(0, 0, 0));
     allObjects[physobj1].physics->physPosition = glm::vec3(0, 3, 0);
+    float r = (*allObjects_Ptr)[physobj1].scale.x;
+    float m = (*allObjects_Ptr)[physobj1].physics->mass;
+    (*allObjects_Ptr)[physobj1].physics->IT = inertiaTensor(
+        (2.0 / 5.0) * m * r * r, 0, 0,
+        0, (2.0 / 5.0) * m * r * r, 0,
+        0, 0, (2.0 / 5.0) * m * r * r);
     physicsObjs.push_back(physobj1); // this needs to be dynamic pointers or something
 
     unsigned int numBoundTex = 0;
@@ -1455,6 +1567,8 @@ int main(void)
     glm::mat4 projection;
 
     double curTime = glfwGetTime();
+    double startTime = curTime;
+    double gameTime = curTime;
 
     int numships = 0;
 
@@ -1474,13 +1588,14 @@ int main(void)
             // we wait at the end of the frame so that we don't waste time in which we could be creating the frame
         }
         curTime = now;
-        double curtimeminusphys = now - physDeltaTime;
+        gameTime += deltaTime * timeScale;
+        double gameTimeMinusPhys = gameTime - physDeltaTime;
         Inputs_MoveObject(window, deltaTime, &camPos, &camRot, &allObjects[physobj1]);
-        while (physicsTime < curtimeminusphys)
+        while (physicsTime < gameTimeMinusPhys)
         {
             updatePhysics(allObjects_Ptr);
         }
-        physicsExtrapolation(&allObjects, curTime - physicsTime);
+        physicsExtrapolation(&allObjects, gameTime - physicsTime);
 
         std::stringstream ss;
         ss << "SaccEngine"
